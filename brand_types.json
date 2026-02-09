@@ -60,6 +60,31 @@
     "selector": "[class*=\"size-chart\"]"
   },
   "bananaclub.co.in": {
+    "type": "MODAL_KIWI",
+    "confidence": 95,
+    "selector": ".kiwi-sizing-modal"
+  },
+  "bawseofficial.com": {
+    "type": "MODAL_KIWI",
+    "confidence": 95,
+    "selector": ".kiwi-sizing-modal"
+  },
+  "belloricco.com": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "beosam.com": {
+    "type": "UNKNOWN",
+    "confidence": 0,
+    "selector": null
+  },
+  "bluebrew.in": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "knitdomain.com": {
     "type": "MODAL_PSWP",
     "confidence": 85,
     "selector": ".pswp__scroll-wrap"

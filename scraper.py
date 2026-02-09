@@ -128,6 +128,19 @@ class SizeChartScraper:
                     }
                 }
                 
+                // Check for Kiwi Sizing Modals
+                if (document.querySelector('.ks-chart-container, .kiwi-sizing-modal, .ks-modal-content, [id*="kiwi-sizing"]')) {
+                    types.push({ type: 'MODAL_KIWI', confidence: 95, selector: '.kiwi-sizing-modal' });
+                }
+                // Check iframes for Kiwi Sizing
+                const iframes = document.querySelectorAll('iframe');
+                for (const iframe of iframes) {
+                    if (iframe.src && iframe.src.includes('kiwisizing')) {
+                        types.push({ type: 'MODAL_KIWI', confidence: 95, selector: '.kiwi-sizing-modal' });
+                        break;
+                    }
+                }
+                
                 // Check for size-related links that might be direct image links
                 const sizeLinks = document.querySelectorAll('a[href*="size"], a[href*="chart"]');
                 for (const link of sizeLinks) {
@@ -233,6 +246,8 @@ class SizeChartScraper:
                 popup_selector = '.pswp--open'
             elif self.detected_type == 'MODAL_BOOTSTRAP':
                 popup_selector = '.modal.show'
+            elif self.detected_type == 'MODAL_KIWI':
+                popup_selector = '.kiwi-sizing-modal, .ks-chart-container, .ks-modal-content'
             elif self.detected_type == 'ACCORDION':
                 popup_selector = 'details[open]'
             elif self.detected_type == 'TAB':
@@ -524,6 +539,8 @@ class SizeChartScraper:
                     // JSC Size Chart app modals
                     '.jsc-modal', '.jsc-modal-body', '.jsc-modal-content', '.jsc-size-chart-modal',
                     '[class*="jsc-"]',
+                    // Kiwi Sizing Modals
+                    '.kiwi-sizing-modal', '.ks-chart-container', '.ks-modal-content', '[id*="kiwi-sizing"]',
                     // Other size chart modals
                     '.ilmsc-modal', '.ilmsc-modal-content', '.ilmsc-content', '.sizechart-container',
                     '.mfp-content', '.mfp-container', 
@@ -552,6 +569,13 @@ class SizeChartScraper:
                 if (jscBody) {
                     log(`Using JSC body container: ${jscBody.className?.substring?.(0, 50)}`);
                     modalContainer = jscBody;
+                }
+
+                // For Kiwi Sizing modals, prefer the chart container
+                const kiwiBody = modalContainer.querySelector('.ks-chart-container, .kiwi-sizing-modal-inner, .ks-modal-content');
+                if (kiwiBody) {
+                    log(`Using Kiwi body container: ${kiwiBody.className?.substring?.(0, 50)}`);
+                    modalContainer = kiwiBody;
                 }
                 
                 log(`Extracting from modal container: ${modalContainer.className?.substring?.(0, 50)}`);

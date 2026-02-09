@@ -26,7 +26,49 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Import the size chart scraper
+# Import the size chart scraper
 from scraper import SizeChartScraper
+
+# Import generic product scraper for non-Shopify fallback
+try:
+    from generic_product_scraper import fetch_generic_product_data
+except ImportError:
+    print("Warning: generic_product_scraper module not found. Non-Shopify fallback disabled.")
+    fetch_generic_product_data = None
+
+def adapt_generic_data_to_shopify_format(generic_data):
+    """
+    Converts generic scraper data to Shopify JSON structure
+    so existing update logic works without changes.
+    """
+    if not generic_data:
+        return None
+        
+    price = generic_data.get("price", 0)
+    original_price = generic_data.get("original_price", 0)
+    
+    # Construct minimal Shopify-compatible structure
+    return {
+        "product": {
+            "title": generic_data.get("title"),
+            "body_html": generic_data.get("description"),
+            "vendor": "Generic", 
+            "product_type": "Apparel",
+            "variants": [
+                {
+                    "price": str(price),
+                    "compare_at_price": str(original_price) if original_price > price else None,
+                    "sku": "",
+                    "option1": "Default Title", 
+                    "availability": True,
+                    "inventory_quantity": 10
+                }
+            ],
+            "images": [{"src": img} for img in generic_data.get("images", [])],
+            "tags": "",
+            "options": [{"name": "Title", "values": ["Default Title"]}]
+        }
+    }
 
 # Load environment variables
 load_dotenv()
@@ -444,26 +486,53 @@ async def main():
                 print(f"  URL: {brand_url[:60]}...")
                 print(f"  Category: {category or 'N/A'}")
                 
+                # Initialize fallback result
+                shopify_data = None
+                
                 try:
-                    # Fetch Shopify JSON
-                    print("  [FETCH] Getting Shopify JSON...")
-                    shopify_data = fetch_shopify_json(brand_url)
-                    print(f"  [FETCH] Success - Title: {shopify_data.get('title', 'N/A')[:40]}...")
+                    # Inner try to handle fallback specific logic
+                    try:
+                        # Fetch Shopify JSON
+                        print("  [FETCH] Getting Shopify JSON...")
+                        shopify_data = fetch_shopify_json(brand_url)
+                        print(f"  [FETCH] Success - Title: {shopify_data.get('title', 'N/A')[:40]}...")
+                    except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, Exception) as e_shopify:
+                        # If generic scraper is available, try fallback
+                        if fetch_generic_product_data:
+                            print(f"  [FETCH] Shopify JSON failed: {str(e_shopify)[:100]}")
+                            print("  [FALLBACK] Attempting Generic Scraper...")
+                            try:
+                                # Use await since Generic Scraper is async
+                                generic_data = await fetch_generic_product_data(brand_url)
+                                if generic_data and generic_data.get('title'):
+                                    shopify_data = adapt_generic_data_to_shopify_format(generic_data)
+                                    print(f"  [FALLBACK] Success - Title: {shopify_data['product']['title'][:40]}...")
+                                else:
+                                    print("  [FALLBACK] Failed or returned empty data.")
+                                    # Re-raise original error if fallback also failed
+                                    raise e_shopify
+                            except Exception as e_generic:
+                                print(f"  [FALLBACK] Generic Scraper failed: {e_generic}")
+                                raise e_shopify # Raise original error for logging
+                        else:
+                            raise e_shopify
                     
-                    # Scrape size chart for apparel only
+                    # Scrape size chart (apparel only)
                     size_chart_html = None
                     if category == "apparel":
+                        # Check if we should scrape size chart
+                        # If we used generic scraper, size chart logic is separate and robust
                         print("  [SIZE CHART] Scraping size chart (apparel)...")
+                        # scrape_size_chart is async
                         size_chart_html = await scrape_size_chart(brand_url)
                         if size_chart_html:
                             print(f"  [SIZE CHART] Found! HTML length: {len(size_chart_html)} chars")
                         else:
-                            # Pass empty string to clear size_chart in DB
                             size_chart_html = ""
                             print("  [SIZE CHART] Not found - will clear field")
                     else:
                         print("  [SIZE CHART] Skipped (not apparel)")
-                    
+                        
                     # Update database
                     print("  [UPDATE] Updating database...")
                     update_product(conn, product_id, shopify_data, size_chart_html)
@@ -478,6 +547,22 @@ async def main():
                         conn.rollback()
                     except:
                         pass
+                    
+                    # If 404, DELETE the product
+                    if e.response.status_code == 404:
+                        print(f"  [DELETE] verified 404 for {brand_url}")
+                        try:
+                            with conn.cursor() as cur:
+                                cur.execute("DELETE FROM scraped_products WHERE id = %s", (product_id,))
+                            conn.commit()
+                            print(f"  [DELETE] Successfully removed product ID {product_id}")
+                            processed += 1 # Count as processed
+                            progress["total_processed"] += 1
+                            continue # Skip to next product
+                        except Exception as del_e:
+                            print(f"  [DELETE ERROR] Failed to delete: {del_e}")
+                            conn.rollback()
+
                     save_error(product_id, brand_url, str(e), "http")
                     errors += 1
                     progress["total_errors"] += 1

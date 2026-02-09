@@ -573,15 +573,54 @@ class SizeChartScraper:
                 // 2. Fallback to generic search if no target ID or target not found
                 if (!modalContainer) {
                     log(`[SEARCH] Searching for active modal (no target ID match)...`);
-                    // Prioritize product-popup-modal class as it's specific
-                    modalContainer = document.querySelector('.product-popup-modal__content, .product-popup-modal') ||
-                                     document.querySelector('[aria-modal="true"][role="dialog"]') || 
-                                     document.querySelector('.is-open[role="dialog"]') ||
-                                     document.querySelector('.modal.open') ||
-                                     document.querySelector('.fancybox-content');
+                    
+                    // Collect all potential candidates
+                    const candidates = Array.from(document.querySelectorAll(
+                        '.product-popup-modal__content, .product-popup-modal, ' +
+                        '[aria-modal="true"][role="dialog"], ' +
+                        '.is-open[role="dialog"], .modal.open, .fancybox-content, ' +
+                        '.drawer__content, .drawer, [class*="drawer"]'
+                    ));
+                    
+                    let bestCandidate = null;
+                    let bestScore = -1;
+                    
+                    for (const cand of candidates) {
+                        if (cand.offsetWidth < 10 && cand.offsetHeight < 10) continue; // Skip invisible
+                        
+                        let score = 0;
+                        const id = (cand.id || "").toLowerCase();
+                        const cls = (cand.className || "").toLowerCase();
+                        const text = (cand.innerText || "").substring(0, 500).toLowerCase();
+                        
+                        // Scoring rules
+                        if (id.includes('size') || id.includes('guide') || id.includes('chart')) score += 50;
+                        if (cls.includes('size') || cls.includes('guide')) score += 30;
+                        if (text.includes('size chart') || text.includes('size guide') || text.includes('measurement')) score += 20;
+                        if (cand.querySelector('table')) score += 40;
+                        
+                        // Negative scoring for common non-size popups
+                        if (id.includes('newsletter') || cls.includes('newsletter')) score -= 50;
+                        if (text.includes('subscribe') && text.includes('newsletter')) score -= 30;
+                        if (id.includes('cart') || cls.includes('cart')) score -= 50;
+                        if (text.includes('your cart is empty')) score -= 50;
+                        
+                        log(`[CANDIDATE] Tag: ${cand.tagName} ID: ${cand.id} Class: ${cand.className.substring(0,30)} Score: ${score}`);
+                        
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestCandidate = cand;
+                        }
+                    }
+                    
+                    // Only use result if score is reasonable, or if we have no other option but it's a standard modal
+                    if (bestCandidate && bestScore > -20) {
+                        modalContainer = bestCandidate;
+                        log(`[SELECTED] Best candidate score: ${bestScore}`);
+                    }
                 }
                 
-                // 3. If still no modal, try the original modalSelectors list
+                // 3. Last resort: specific original list if above logic failed completely
                 if (!modalContainer) {
                     for (const sel of modalSelectors) {
                         const el = document.querySelector(sel);

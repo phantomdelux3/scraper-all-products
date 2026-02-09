@@ -445,6 +445,14 @@ class SizeChartScraper:
                                 if (summary) summary.click();
                                 log(`[ACCORDION] Opened details element directly`);
                             } else {
+                                // Check for aria-controls or data-target to identify specific modal
+                                const targetId = el.getAttribute('aria-controls') || el.getAttribute('data-target') || el.getAttribute('href');
+                                if (targetId) {
+                                    const cleanId = targetId.replace('#', '');
+                                    window._sc_target_modal_id = cleanId;
+                                    log(`[TARGET] Set target modal ID to: ${cleanId}`);
+                                }
+
                                 try { el.click(); } catch(e) { log(`Click error: ${e}`); }
                                 
                                 // Check for MFP (Magnific Popup)
@@ -550,15 +558,42 @@ class SizeChartScraper:
                 ];
                 
                 let modalContainer = null;
-                for (const sel of modalSelectors) {
-                    const el = document.querySelector(sel);
-                    if (el && (el.offsetWidth > 100 || el.offsetHeight > 100)) {
-                        log(`Found active modal: ${sel}`);
-                        modalContainer = el;
-                        break;
+                const modalTargetId = window._sc_target_modal_id;
+                
+                // 1. Try to find modal by target ID if available
+                if (modalTargetId) {
+                    log(`[TARGET] Looking for modal with ID: ${modalTargetId}`);
+                    modalContainer = document.getElementById(modalTargetId);
+                    if (!modalContainer) {
+                        // Sometimes the ID is on a child div or parent wrapped in a dialog
+                        modalContainer = document.querySelector(`[id*="${modalTargetId}"]`);
                     }
                 }
                 
+                // 2. Fallback to generic search if no target ID or target not found
+                if (!modalContainer) {
+                    log(`[SEARCH] Searching for active modal (no target ID match)...`);
+                    // Prioritize product-popup-modal class as it's specific
+                    modalContainer = document.querySelector('.product-popup-modal__content, .product-popup-modal') ||
+                                     document.querySelector('[aria-modal="true"][role="dialog"]') || 
+                                     document.querySelector('.is-open[role="dialog"]') ||
+                                     document.querySelector('.modal.open') ||
+                                     document.querySelector('.fancybox-content');
+                }
+                
+                // 3. If still no modal, try the original modalSelectors list
+                if (!modalContainer) {
+                    for (const sel of modalSelectors) {
+                        const el = document.querySelector(sel);
+                        // Check for visibility and size to ensure it's an active modal
+                        if (el && (el.offsetWidth > 100 || el.offsetHeight > 100)) {
+                            log(`Found active modal via generic selector: ${sel}`);
+                            modalContainer = el;
+                            break;
+                        }
+                    }
+                }
+
                 if (!modalContainer) {
                     log("No active modal found, will use general extraction.");
                     return { table: null, images: [], logs: logs, foundModal: false };

@@ -1,10 +1,16 @@
 import asyncio
 import re
 import os
+import sys
 import json
 import argparse
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
+
+# Force UTF-8 encoding for console output on Windows
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # Cache file for storing detected brand types
 BRAND_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "brand_types.json")
@@ -209,10 +215,10 @@ class SizeChartScraper:
                     'selector': detection['primaryType'].get('selector', None)
                 }
                 save_brand_cache(self.brand_cache)
-                print(f"  💾 Saved to cache: {self.domain} → {self.detected_type}")
+                print(f"  [CACHE] Saved to cache: {self.domain} -> {self.detected_type}")
 
             # 1. INTERACTION: Find and Click Triggers (type-aware)
-            await self.interact_with_triggers(page)
+            navigated_away = await self.interact_with_triggers(page)
             
             # Wait for popups/modals to appear - use type-specific wait
             await page.wait_for_timeout(2000)
@@ -256,15 +262,73 @@ class SizeChartScraper:
                     pass
 
             # 2. DETECTION & EXTRACTION
-            result = await self.extract_content(page)
+            # If navigation occurred, skip DOM extraction and use gallery fallback
+            if navigated_away:
+                print("Navigation detected - skipping DOM extraction, using gallery fallback only")
+                result = {'table': None, 'images': [], 'textHtml': None}
+            else:
+                result = await self.extract_content(page)
             
-            # 3. FALLBACK
-            if not result['table'] and not result['images']:
-                print("No content found in DOM. Attempting Shopify JSON fallback...")
-                fallback_images = await self.fetch_shopify_fallback(page)
-                if fallback_images:
-                    result['images'] = fallback_images
-                    print(f"Fallback retrieved {len(fallback_images)} images.")
+            # 3. FALLBACK: Check product gallery images for size chart URLs
+            # This catches brands like adlt.in where size chart is in product gallery
+            if not result['table'] and not result['images'] and not result.get('textHtml'):
+                print("No size chart in DOM. Checking product gallery images...")
+                gallery_images = await page.evaluate("""
+                    () => {
+                        const sizeRegex = /size[_-]?(chart|guide)|measurement|sizing/i;
+                        const uniqueImages = new Set();
+                        
+                        // Helper to clean URL (remove query params and normalize protocol)
+                        const cleanUrl = (url) => {
+                            try {
+                                let clean = url.split('?')[0];
+                                if (clean.startsWith('//')) {
+                                    clean = 'https:' + clean;
+                                }
+                                return clean;
+                            } catch (e) {
+                                return url;
+                            }
+                        };
+                        
+                        // Check main product gallery images
+                        const galleryImgs = document.querySelectorAll(
+                            '.product-media img, .product__media img, .product-single__media img, ' +
+                            '.product-image-gallery img, .product-gallery img, [data-product-media] img, ' +
+                            '.product__slides img, .slick-slide img, .swiper-slide img'
+                        );
+                        
+                        for (const img of galleryImgs) {
+                            const src = img.src || img.dataset?.src || '';
+                            if (sizeRegex.test(src)) {
+                                uniqueImages.add(cleanUrl(src));
+                            }
+                        }
+                        
+                        // Also check all srcset/data-srcset for size chart images
+                        const allImgs = document.querySelectorAll('img[srcset], img[data-srcset]');
+                        for (const img of allImgs) {
+                            const srcset = img.srcset || img.dataset?.srcset || '';
+                            if (sizeRegex.test(srcset)) {
+                                // Extract highest quality URL from srcset
+                                const match = srcset.split(',').pop().trim().split(' ')[0];
+                                if (match) {
+                                    uniqueImages.add(cleanUrl(match));
+                                }
+                            }
+                        }
+                        
+                        return Array.from(uniqueImages);
+                    }
+                """)
+                
+                if gallery_images:
+                    print(f"  Found {len(gallery_images)} size chart image(s) in product gallery!")
+                    for img in gallery_images:
+                        print(f"    - {img[:80]}...")
+                    result['images'] = gallery_images[:3]  # Limit to 3
+                else:
+                    print("No size chart found in product gallery either.")
 
             self.print_result(result)
             await context.close()
@@ -397,16 +461,31 @@ class SizeChartScraper:
         for msg in logs:
             print(f"INTERACTION LOG: {msg}")
 
-        # Post-interaction wait for MFP
-        is_mfp = await page.evaluate("() => window._sc_mfp_clicked === true")
-        if is_mfp:
-            print("MFP Trigger clicked. Waiting for .mfp-content specifically...")
-            try:
-                await page.wait_for_selector(".mfp-content", timeout=5000)
-                print("MFP Content appeared!")
-                await page.wait_for_timeout(2000)
-            except:
-                print("MFP Content did not appear within timeout.")
+        # Post-interaction wait for MFP - wrapped in try-except to handle navigation
+        try:
+            is_mfp = await page.evaluate("() => window._sc_mfp_clicked === true")
+            if is_mfp:
+                print("MFP Trigger clicked. Waiting for .mfp-content specifically...")
+                try:
+                    await page.wait_for_selector(".mfp-content", timeout=5000)
+                    print("MFP Content appeared!")
+                    await page.wait_for_timeout(2000)
+                except:
+                    print("MFP Content did not appear within timeout.")
+            return False  # No navigation occurred
+        except Exception as e:
+            # Navigation may have occurred (e.g., clicking a link that goes to size guide page)
+            if "destroyed" in str(e) or "navigation" in str(e).lower():
+                print("INTERACTION LOG: Page navigated after click - going back to product page")
+                try:
+                    await page.go_back()
+                    await page.wait_for_load_state("domcontentloaded")
+                    await page.wait_for_timeout(2000)
+                    print("INTERACTION LOG: Returned to product page - will use gallery fallback")
+                except:
+                    print("INTERACTION LOG: Could not go back - will try gallery fallback anyway")
+                return True  # Navigation occurred, use gallery fallback
+            return False
 
     async def extract_content(self, page):
         """Identifies best container and extracts images/tables."""
@@ -442,6 +521,10 @@ class SizeChartScraper:
                 
                 // Priority modal selectors - extract directly from these if they exist and are visible
                 const modalSelectors = [
+                    // JSC Size Chart app modals
+                    '.jsc-modal', '.jsc-modal-body', '.jsc-modal-content', '.jsc-size-chart-modal',
+                    '[class*="jsc-"]',
+                    // Other size chart modals
                     '.ilmsc-modal', '.ilmsc-modal-content', '.ilmsc-content', '.sizechart-container',
                     '.mfp-content', '.mfp-container', 
                     '.pswp--open .pswp__scroll-wrap', '.pswp__container', '.pswp__item',
@@ -462,6 +545,13 @@ class SizeChartScraper:
                 if (!modalContainer) {
                     log("No active modal found, will use general extraction.");
                     return { table: null, images: [], logs: logs, foundModal: false };
+                }
+                
+                // For JSC modals, prefer the body-wrapper for content extraction
+                const jscBody = modalContainer.querySelector('.jsc-modal-body-wrapper, .jsc-modal-body, .jsc-modal-content');
+                if (jscBody) {
+                    log(`Using JSC body container: ${jscBody.className?.substring?.(0, 50)}`);
+                    modalContainer = jscBody;
                 }
                 
                 log(`Extracting from modal container: ${modalContainer.className?.substring?.(0, 50)}`);
@@ -489,29 +579,45 @@ class SizeChartScraper:
                     const naturalWidth = img.naturalWidth || parseInt(img.width) || 0;
                     const naturalHeight = img.naturalHeight || parseInt(img.height) || 0;
                     
-                    if (!seen.has(src) && (naturalWidth > 50 || score > 20)) {
-                        validImages.push({ src, score, w: naturalWidth, h: naturalHeight });
+                    // INSIDE A SIZE CHART MODAL: Accept all images since the modal already confirms it's size chart context
+                    // Only skip very small images (icons, etc)
+                    if (!seen.has(src) && (naturalWidth > 50 || naturalHeight > 50 || score > 0)) {
+                        validImages.push({ src, score: score || 10, w: naturalWidth, h: naturalHeight });
                         seen.add(src);
-                        log(`Modal image: ${src.substring(0, 60)}... Score: ${score} Size: ${naturalWidth}x${naturalHeight}`);
+                        log(`Modal image: ${src.substring(0, 60)}... Score: ${score || 10} Size: ${naturalWidth}x${naturalHeight}`);
+                    } else if (!seen.has(src)) {
+                        log(`Modal skipped (too small): ${src.substring(0, 60)}...`);
                     }
                 }
                 
                 // Extract tables from modal
                 const tables = Array.from(modalContainer.querySelectorAll("table"));
+                log(`Found ${tables.length} tables in modal.`);
                 let allTables = [];
                 for (const table of tables) {
                     const rows = Array.from(table.rows).map(row => 
                         Array.from(row.cells).map(cell => cell.innerText.trim())
                     );
                     if (rows.length > 0 && rows[0].length > 0) {
+                        log(`Table with ${rows.length} rows, ${rows[0].length} cols`);
                         allTables.push(rows);
                     }
                 }
                 
+                // Also try to find div-based size charts (common in JSC apps)
+                if (allTables.length === 0) {
+                    const sizeRows = modalContainer.querySelectorAll('[class*="size-row"], [class*="jsc-row"], .jsc-table-row');
+                    if (sizeRows.length > 0) {
+                        log(`Found ${sizeRows.length} div-based size rows`);
+                    }
+                }
+                
                 validImages.sort((a,b) => b.score - a.score);
+                // Limit to max 3 images
+                const topImages = validImages.slice(0, 3);
                 return { 
                     table: allTables.length ? allTables[0] : null, 
-                    images: validImages.map(i => i.src), 
+                    images: topImages.map(i => i.src), 
                     logs: logs, 
                     foundModal: true 
                 };
@@ -683,12 +789,14 @@ class SizeChartScraper:
                      const hasSize = naturalWidth > 30 || naturalHeight > 30;
                      
                      if (!seen.has(src)) {
-                         if (hasSize || score > 20) {
+                         // ONLY include images with size-related keywords (score > 0)
+                         // Ignore generic product images with score 0
+                         if (score > 0) {
                              validImages.push({ src: src, score: score, w: naturalWidth, h: naturalHeight });
                              seen.add(src);
                              log(`Image: ${src.substring(0, 60)}... Score: ${score} Size: ${naturalWidth}x${naturalHeight}`);
                          } else {
-                             log(`Skipped (small/no size): ${src.substring(0, 60)}...`);
+                             log(`Skipped (no size keywords, score=0): ${src.substring(0, 60)}...`);
                          }
                      }
                 }
@@ -706,9 +814,33 @@ class SizeChartScraper:
                 }
                 
                 validImages.sort((a,b) => b.score - a.score);
-                const finalImages = validImages.map(i => i.src);
+                // Limit to max 3 images to avoid returning too many
+                const topImages = validImages.slice(0, 3);
+                const finalImages = topImages.map(i => i.src);
+                
+                // If no images or tables found, try to extract text/HTML content
+                // ONLY for specific domains that use text-only size info (like dopamean.in)
+                let textHtml = null;
+                const textOnlyBrands = ['dopamean.in'];
+                const currentDomain = window.location.hostname.replace('www.', '');
+                
+                if (finalImages.length === 0 && allTables.length === 0 && bestContainer && textOnlyBrands.includes(currentDomain)) {
+                    // Check if container has meaningful text content with size keywords
+                    const textContent = bestContainer.innerText || "";
+                    log(`Text content length: ${textContent.length}, preview: ${textContent.substring(0, 80).replace(/\\n/g, ' ')}...`);
+                    
+                    // More inclusive regex for size-related content
+                    const sizeKeywords = /\\b(size|cm|inch|chest|waist|length|shoulder|sleeve|fit|measurements?|dimensions?|small|medium|large|xs|xl|xxl|armhole|bust|hip)\\b/i;
+                    if (sizeKeywords.test(textContent) && textContent.length > 20 && textContent.length < 5000) {
+                        // Clean and return the HTML
+                        textHtml = bestContainer.innerHTML;
+                        log(`Found text-based size info: ${textContent.substring(0, 100).replace(/\\n/g, ' ')}...`);
+                    } else {
+                        log(`Text does not match size keywords or length requirements`);
+                    }
+                }
 
-                return { table: allTables.length ? allTables[0] : null, images: finalImages, logs: logs };
+                return { table: allTables.length ? allTables[0] : null, images: finalImages, textHtml: textHtml, logs: logs };
             }
         """)
         
@@ -740,21 +872,29 @@ class SizeChartScraper:
         print("\n====== SIZE CHART RESULT ======\n")
         found = False
         if result['table']:
-            print(f"📏 Found Table (Data):")
+            print(f"[TABLE] Found Table (Data):")
             for row in result['table']:
                 print(" | ".join(row))
             print("\n")
             found = True
         
         if result['images']:
-            print(f"🖼 Found Images (Ranked):")
+            print(f"[IMAGES] Found Images (Ranked):")
             for img in result['images']:
                 print(img)
             print("\n")
             found = True
+        
+        if result.get('textHtml'):
+            print(f"[TEXT HTML] Found Text-based Size Info:")
+            # Show first 500 chars of HTML
+            html_preview = result['textHtml'][:500] + "..." if len(result['textHtml']) > 500 else result['textHtml']
+            print(html_preview)
+            print(f"\n[HTML Length: {len(result['textHtml'])} chars]")
+            found = True
             
         if not found:
-            print("❌ No size chart found.")
+            print("[NONE] No size chart found.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Size Chart Scraper")

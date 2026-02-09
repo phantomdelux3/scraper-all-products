@@ -179,6 +179,12 @@ def result_to_html(result: dict) -> str:
     if result.get("images"):
         parts.append(images_to_html(result["images"]))
     
+    # Handle text-based size info (HTML content from containers like dopamean.in)
+    if result.get("textHtml"):
+        # Wrap the extracted HTML in a size-info div
+        text_html = result["textHtml"]
+        parts.append(f'<div class="size-chart-text">\n{text_html}\n</div>')
+    
     if not parts:
         return None
     
@@ -242,11 +248,8 @@ async def scrape_size_chart(brand_url: str) -> str:
             # Extract content
             result = await scraper.extract_content(page)
             
-            # Fallback if needed
-            if not result.get('table') and not result.get('images'):
-                fallback_images = await scraper.fetch_shopify_fallback(page)
-                if fallback_images:
-                    result['images'] = fallback_images
+            # NO FALLBACK - only use DOM extraction results
+            # The Shopify fallback was returning random product images as size charts
             
             await context.close()
             
@@ -317,6 +320,9 @@ def update_product(conn, product_id: int, shopify_data: dict, size_chart_html: s
     if size_chart_html:
         update_fields.append("size_chart = %s")
         params.append(size_chart_html)
+    elif size_chart_html == "":
+        # Explicitly clear size_chart for apparel products with no chart found
+        update_fields.append("size_chart = NULL")
     
     # Add product_id for WHERE clause
     params.append(product_id)
@@ -452,7 +458,9 @@ async def main():
                         if size_chart_html:
                             print(f"  [SIZE CHART] Found! HTML length: {len(size_chart_html)} chars")
                         else:
-                            print("  [SIZE CHART] Not found or failed")
+                            # Pass empty string to clear size_chart in DB
+                            size_chart_html = ""
+                            print("  [SIZE CHART] Not found - will clear field")
                     else:
                         print("  [SIZE CHART] Skipped (not apparel)")
                     

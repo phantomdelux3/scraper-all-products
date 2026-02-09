@@ -1,22 +1,67 @@
 {
-  "lovegen.com": {
-    "type": "MODAL_ILMS",
-    "confidence": 90,
-    "selector": ".ilmsc-modal"
+  "psyfyi.com": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
   },
-  "venecci.com": {
+  "dopamean.in": {
+    "type": "UNKNOWN",
+    "confidence": 0,
+    "selector": null
+  },
+  "51x49.in": {
     "type": "INLINE",
     "confidence": 85,
     "selector": "[class*=\"size-chart\"]"
   },
-  "thgc.club": {
+  "52degree.in": {
+    "type": "MODAL_MFP",
+    "confidence": 85,
+    "selector": ".mfp-content"
+  },
+  "5feet11.com": {
+    "type": "MODAL_PSWP",
+    "confidence": 85,
+    "selector": ".pswp__scroll-wrap"
+  },
+  "aakartaro.com": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "adlt.in": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "deployed.store": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "a-o-r.com": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "aquascutum-active.com": {
+    "type": "UNKNOWN",
+    "confidence": 0,
+    "selector": null
+  },
+  "arxstudios.in": {
+    "type": "ACCORDION",
+    "confidence": 60,
+    "selector": "details[open]"
+  },
+  "athflex.com": {
     "type": "INLINE",
     "confidence": 85,
     "selector": "[class*=\"size-chart\"]"
   },
-  "cannabie.in": {
-    "type": "INLINE",
+  "bananaclub.co.in": {
+    "type": "MODAL_PSWP",
     "confidence": 85,
-    "selector": "[class*=\"sizeChart\"]"
+    "selector": ".pswp__scroll-wrap"
   }
 }

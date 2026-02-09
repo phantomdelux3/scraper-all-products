@@ -1,0 +1,72 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# =========================
+# Virtual Environments
+# =========================
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.*
+*.env
+
+# =========================
+# Logs & Runtime files
+# =========================
+*.log
+*.out
+*.pid
+
+# =========================
+# Scraper Runtime / State
+# =========================
+progress.json
+error.json
+*.tmp
+*.cache
+
+# =========================
+# OS / Editor files
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Jupyter (if any)
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Test / Coverage
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# =========================
+# Credentials / Secrets
+# =========================
+*.key
+*.pem
+*.crt

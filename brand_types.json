@@ -88,5 +88,20 @@
     "type": "MODAL_PSWP",
     "confidence": 85,
     "selector": ".pswp__scroll-wrap"
+  },
+  "liltootall.com": {
+    "type": "MODAL_PSWP",
+    "confidence": 85,
+    "selector": ".pswp__scroll-wrap"
+  },
+  "loudless.in": {
+    "type": "MODAL_PSWP",
+    "confidence": 85,
+    "selector": ".pswp__scroll-wrap"
+  },
+  "venecci.com": {
+    "type": "INLINE",
+    "confidence": 85,
+    "selector": "[class*=\"size-chart\"]"
   }
 }

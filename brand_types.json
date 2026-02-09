@@ -1,0 +1,22 @@
+{
+  "lovegen.com": {
+    "type": "MODAL_ILMS",
+    "confidence": 90,
+    "selector": ".ilmsc-modal"
+  },
+  "venecci.com": {
+    "type": "INLINE",
+    "confidence": 85,
+    "selector": "[class*=\"size-chart\"]"
+  },
+  "thgc.club": {
+    "type": "INLINE",
+    "confidence": 85,
+    "selector": "[class*=\"size-chart\"]"
+  },
+  "cannabie.in": {
+    "type": "INLINE",
+    "confidence": 85,
+    "selector": "[class*=\"sizeChart\"]"
+  }
+}

@@ -500,6 +500,9 @@ async def main():
                 # Update progress bar description with current product
                 pbar.set_postfix_str(f"{short_title}", refresh=True)
                 
+                # VERBOSE LOGGING START
+                log(f"Product: {brand_url}", pbar)
+                
                 shopify_data = None
                 
                 try:
@@ -538,6 +541,8 @@ async def main():
                     
                     session_updated += 1
                     progress["total_updated"] += 1
+                    log(f"COMPLETED: {brand_url}", pbar)
+                    
                     
                 except httpx.HTTPStatusError as e:
                     try:
@@ -564,6 +569,8 @@ async def main():
                     log(f"  ✖ HTTP {e.response.status_code}: {short_title}", pbar)
                     session_errors += 1
                     progress["total_errors"] += 1
+                    log(f"Completed (Error): {brand_url}", pbar)
+                    
                     
                 except httpx.RequestError as e:
                     try:
@@ -574,6 +581,8 @@ async def main():
                     log(f"  ✖ Request failed: {short_title}", pbar)
                     session_errors += 1
                     progress["total_errors"] += 1
+                    log(f"Completed (Error): {brand_url}", pbar)
+                    
                     
                 except Exception as e:
                     try:
@@ -584,6 +593,7 @@ async def main():
                     log(f"  ✖ Error: {short_title} — {str(e)[:60]}", pbar)
                     session_errors += 1
                     progress["total_errors"] += 1
+                    log(f"Completed (Error): {brand_url}", pbar)
                 
                 # Update last processed ID and advance progress bar
                 last_id = product_id

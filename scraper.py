@@ -128,6 +128,11 @@ class SizeChartScraper:
                     }
                 }
                 
+                // Check for SCR Size Chart app
+                if (document.querySelector('.scr-modal, .scr-open-size-chart, [class*="scr-open-size"]')) {
+                    types.push({ type: 'MODAL_SCR', confidence: 90, selector: '.scr-modal' });
+                }
+                
                 // Check for Kiwi Sizing Modals
                 if (document.querySelector('.ks-chart-container, .kiwi-sizing-modal, .ks-modal-content, [id*="kiwi-sizing"]')) {
                     types.push({ type: 'MODAL_KIWI', confidence: 95, selector: '.kiwi-sizing-modal' });
@@ -248,6 +253,8 @@ class SizeChartScraper:
                 popup_selector = '.modal.show'
             elif self.detected_type == 'MODAL_KIWI':
                 popup_selector = '.kiwi-sizing-modal, .ks-chart-container, .ks-modal-content'
+            elif self.detected_type == 'MODAL_SCR':
+                popup_selector = '.scr-modal'
             elif self.detected_type == 'ACCORDION':
                 popup_selector = 'details[open]'
             elif self.detected_type == 'TAB':
@@ -264,7 +271,7 @@ class SizeChartScraper:
             # Fallback: Try common popup selectors
             popup_selectors = [
                 ".mfp-content", ".ilmsc-modal", ".pswp--open", ".modal.show",
-                "[class*='sizechart']", ".size-guide-modal", ".popup-content",
+                ".scr-modal", "[class*='sizechart']", ".size-guide-modal", ".popup-content",
                 ".drawer.is-active", ".modal-open", "[aria-modal='true']"
             ]
             for selector in popup_selectors:
@@ -359,7 +366,7 @@ class SizeChartScraper:
                 
                 log("Starting interactions...");
                 // Primary keywords - specific size chart terms
-                const primaryKeywords = /size\\s*(chart|guide|help|specs|match|recommendation|link)|measurements|dimensions|sizing\\s*(chart|guide)|body\\s*(chart|guide)|find\\s*my\\s*size|sizelink/i;
+                const primaryKeywords = /size[\\s_-]*(chart|guide|help|specs|match|recommendation|link)|measurements|dimensions|sizing[\\s_-]*(chart|guide)|body[\\s_-]*(chart|guide)|find\\s*my\\s*size|sizelink/i;
                 
                 // Secondary keywords - standalone 'size' for accordion titles (must be short text)
                 const accordionKeywords = /^size$/i;
@@ -544,6 +551,8 @@ class SizeChartScraper:
                 
                 // Priority modal selectors - extract directly from these if they exist and are visible
                 const modalSelectors = [
+                    // SCR Size Chart app modals
+                    '.scr-modal', '[class*="scr-modal"]',
                     // JSC Size Chart app modals
                     '.jsc-modal', '.jsc-modal-body', '.jsc-modal-content', '.jsc-size-chart-modal',
                     '[class*="jsc-"]',
@@ -579,6 +588,7 @@ class SizeChartScraper:
                         '.product-popup-modal__content, .product-popup-modal, ' +
                         '[aria-modal="true"][role="dialog"], ' +
                         '.is-open[role="dialog"], .modal.open, .fancybox-content, ' +
+                        '.scr-modal, [class*="scr-modal"], ' +
                         '.ilmsc-modal, .ilmsc-modal-content, [class*="ilmsc"], ' +
                         '[class*="sizechart-modal"], [class*="size-chart-modal"], [class*="sizechart"], ' +
                         '.drawer__content, .drawer, [class*="drawer"]'
@@ -600,6 +610,16 @@ class SizeChartScraper:
                         if (cls.includes('size') || cls.includes('guide')) score += 30;
                         if (text.includes('size chart') || text.includes('size guide') || text.includes('measurement')) score += 20;
                         if (cand.querySelector('table')) score += 40;
+                        
+                        // SCR Size Chart app - high priority modal
+                        if (cls.includes('scr-modal')) score += 80;
+                        
+                        // Penalize inline containers that are just triggers/wrappers (not actual content holders)
+                        // These often match sizechart-related classes but contain no content themselves
+                        if (cls.includes('sizechart-inline') || cls.includes('best-fit-size')) {
+                            const hasContent = cand.querySelector('table, img');
+                            if (!hasContent) score -= 30;
+                        }
                         
                         // Negative scoring for common non-size popups
                         if (id.includes('newsletter') || cls.includes('newsletter')) score -= 50;

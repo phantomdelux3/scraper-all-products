@@ -255,7 +255,7 @@ class SizeChartScraper:
             
             if popup_selector:
                 try:
-                    await page.wait_for_selector(popup_selector, timeout=5000)
+                    await page.wait_for_selector(popup_selector, state='visible', timeout=8000)
                     print(f"Type-specific wait: {popup_selector} appeared")
                     await page.wait_for_timeout(1000)
                 except:
@@ -579,6 +579,8 @@ class SizeChartScraper:
                         '.product-popup-modal__content, .product-popup-modal, ' +
                         '[aria-modal="true"][role="dialog"], ' +
                         '.is-open[role="dialog"], .modal.open, .fancybox-content, ' +
+                        '.ilmsc-modal, .ilmsc-modal-content, [class*="ilmsc"], ' +
+                        '[class*="sizechart-modal"], [class*="size-chart-modal"], [class*="sizechart"], ' +
                         '.drawer__content, .drawer, [class*="drawer"]'
                     ));
                     
@@ -644,6 +646,13 @@ class SizeChartScraper:
                     log(`Using JSC body container: ${jscBody.className?.substring?.(0, 50)}`);
                     modalContainer = jscBody;
                 }
+                
+                // For ILMS modals, prefer the content/body container to avoid header/footer noise
+                const ilmsBody = modalContainer.querySelector('.ilmsc-modal-content, .ilmsc-body, .ilmsc-content');
+                if (ilmsBody) {
+                    log(`Using ILMS body container: ${ilmsBody.className?.substring?.(0, 50)}`);
+                    modalContainer = ilmsBody;
+                }
 
                 // For Kiwi Sizing modals, prefer the chart container
                 const kiwiBody = modalContainer.querySelector('.ks-chart-container, .kiwi-sizing-modal-inner, .ks-modal-content');
@@ -664,7 +673,18 @@ class SizeChartScraper:
                 for (const img of imgs) {
                     let src = img.src || img.dataset?.src || "";
                     if (!src || src.includes('data:image') || src.includes('placeholder')) continue;
-                    if (src.includes('logo') || src.includes('icon')) continue; // Skip logos
+                    
+                    const srcLowerM = src.toLowerCase();
+                    // Skip logos and icons
+                    if (srcLowerM.includes('logo') || srcLowerM.includes('icon')) continue;
+                    // Skip Shopify collection/category images (never size charts)
+                    if (srcLowerM.includes('/collections/') || srcLowerM.includes('/collection/')) continue;
+                    
+                    // Smart SVG filter: block icon-like SVGs, allow size-chart SVGs
+                    if (srcLowerM.endsWith('.svg') || srcLowerM.includes('.svg?')) {
+                        const svgName = srcLowerM.split('/').pop().split('?')[0];
+                        if (!/size|chart|guide|measurement/i.test(svgName)) continue;
+                    }
                     
                     let score = 0;
                     const srcLower = src.toLowerCase();
@@ -694,7 +714,17 @@ class SizeChartScraper:
                 let allTables = [];
                 for (const table of tables) {
                     const rows = Array.from(table.rows).map(row => 
-                        Array.from(row.cells).map(cell => cell.innerText.trim())
+                        Array.from(row.cells).map(cell => {
+                            // Try multiple ways to get text
+                            let text = cell.innerText.trim();
+                            if (!text) text = cell.textContent.trim();
+                            // Handle inputs in cells
+                            if (!text) {
+                                const input = cell.querySelector('input');
+                                if (input) text = input.value || input.placeholder || "";
+                            }
+                            return text;
+                        })
                     );
                     if (rows.length > 0 && rows[0].length > 0) {
                         log(`Table with ${rows.length} rows, ${rows[0].length} cols`);
@@ -845,7 +875,17 @@ class SizeChartScraper:
                 let allTables = [];
                 for (const table of tables) {
                     const rows = Array.from(table.rows).map(row => 
-                        Array.from(row.cells).map(cell => cell.innerText.trim())
+                        Array.from(row.cells).map(cell => {
+                            // Try multiple ways to get text
+                            let text = cell.innerText.trim();
+                            if (!text) text = cell.textContent.trim();
+                            // Handle inputs in cells
+                            if (!text) {
+                                const input = cell.querySelector('input');
+                                if (input) text = input.value || input.placeholder || "";
+                            }
+                            return text;
+                        })
                     );
                     if (rows.length > 0 && rows[0].length > 0) {
                         allTables.push(rows);
@@ -867,6 +907,18 @@ class SizeChartScraper:
                      }
                      
                      if (!src || src.includes('data:image') || src.includes('placeholder')) continue;
+                     
+                     const srcLowerG = src.toLowerCase();
+                     // Skip logos and icons
+                     if (srcLowerG.includes('logo') || srcLowerG.includes('icon')) continue;
+                     // Skip Shopify collection/category images (never size charts)
+                     if (srcLowerG.includes('/collections/') || srcLowerG.includes('/collection/')) continue;
+                     
+                     // Smart SVG filter: block icon-like SVGs, allow size-chart SVGs
+                     if (srcLowerG.endsWith('.svg') || srcLowerG.includes('.svg?')) {
+                         const svgName = srcLowerG.split('/').pop().split('?')[0];
+                         if (!/size|chart|guide|measurement/i.test(svgName)) continue;
+                     }
                      
                      let score = 0;
                      const srcLower = src.toLowerCase();

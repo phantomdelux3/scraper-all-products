@@ -375,7 +375,7 @@ def update_product(conn, product_id: int, shopify_data: dict, size_chart_html: s
     conn.commit()
 
 
-def get_products_to_update(conn, last_id: int = None, batch_size: int = 100):
+def get_products_to_update(conn, last_id: int = None, batch_size: int = 100, category_filter: str = None):
     """Fetch batch of products to update, ordered by id"""
     query = """
         SELECT id, brand_url, category, title
@@ -383,6 +383,10 @@ def get_products_to_update(conn, last_id: int = None, batch_size: int = 100):
         WHERE brand_url IS NOT NULL AND brand_url != ''
     """
     params = []
+    
+    if category_filter:
+        query += " AND lower(category) = lower(%s)"
+        params.append(category_filter)
     
     if last_id is not None:
         query += " AND id > %s"
@@ -396,7 +400,7 @@ def get_products_to_update(conn, last_id: int = None, batch_size: int = 100):
         return cur.fetchall()
 
 
-def get_total_count(conn, last_id: int = None):
+def get_total_count(conn, last_id: int = None, category_filter: str = None):
     """Get total count of products remaining"""
     query = """
         SELECT COUNT(*) as count
@@ -404,6 +408,10 @@ def get_total_count(conn, last_id: int = None):
         WHERE brand_url IS NOT NULL AND brand_url != ''
     """
     params = []
+    
+    if category_filter:
+        query += " AND lower(category) = lower(%s)"
+        params.append(category_filter)
     
     if last_id is not None:
         query += " AND id > %s"
@@ -414,20 +422,32 @@ def get_total_count(conn, last_id: int = None):
         return cur.fetchone()["count"]
 
 
-def get_absolute_total(conn):
+def get_absolute_total(conn, category_filter: str = None):
     """Get absolute total count of all products (for progress bar denominator)"""
     query = """
         SELECT COUNT(*) as count
         FROM scraped_products
         WHERE brand_url IS NOT NULL AND brand_url != ''
     """
+    params = []
+    
+    if category_filter:
+        query += " AND lower(category) = lower(%s)"
+        params.append(category_filter)
+
     with conn.cursor() as cur:
-        cur.execute(query)
+        cur.execute(query, params)
         return cur.fetchone()["count"]
 
 
 async def main():
     """Main function to run the product updater"""
+    
+    # Ask for category
+    print()
+    category_input = input("Enter category to update (leave blank for all): ").strip()
+    category_filter = category_input if category_input else None
+    print()
     
     # Load progress
     progress = load_progress()
@@ -445,8 +465,8 @@ async def main():
         return
     
     # Get counts
-    total_all = get_absolute_total(conn)
-    remaining = get_total_count(conn, last_id)
+    total_all = get_absolute_total(conn, category_filter)
+    remaining = get_total_count(conn, last_id, category_filter)
     already_done = progress["total_processed"]
     
     # Header
@@ -454,11 +474,12 @@ async def main():
     print("━" * 55)
     print("  PRODUCT UPDATER")
     print("━" * 55)
+    display_category = category_filter if category_filter else "ALL"
     if last_id:
-        print(f"  ▸ Resuming — {already_done:,} done, {remaining:,} remaining")
+        print(f"  ▸ Resuming [{display_category}] — {already_done:,} done, {remaining:,} remaining")
         print(f"  ▸ Updated: {progress['total_updated']:,}  Errors: {progress['total_errors']:,}")
     else:
-        print(f"  ▸ Fresh start — {total_all:,} products")
+        print(f"  ▸ Fresh start [{display_category}] — {total_all:,} products")
     print("━" * 55)
     print()
     
@@ -482,7 +503,7 @@ async def main():
     
     try:
         while True:
-            products = get_products_to_update(conn, last_id, batch_size)
+            products = get_products_to_update(conn, last_id, batch_size, category_filter)
             
             if not products:
                 log("✔ All products processed!", pbar)

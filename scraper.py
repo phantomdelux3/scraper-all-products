@@ -133,6 +133,11 @@ class SizeChartScraper:
                     types.push({ type: 'MODAL_SCR', confidence: 90, selector: '.scr-modal' });
                 }
                 
+                // Check for Avada Theme Modals
+                if (document.querySelector('#avada-modal-content, .Avada-Modal__ContainerWrapper, [class*="Avada-Modal"]')) {
+                    types.push({ type: 'MODAL_AVADA', confidence: 85, selector: '#avada-modal-content' });
+                }
+                
                 // Check for Kiwi Sizing Modals
                 if (document.querySelector('.ks-chart-container, .kiwi-sizing-modal, .ks-modal-content, [id*="kiwi-sizing"]')) {
                     types.push({ type: 'MODAL_KIWI', confidence: 95, selector: '.kiwi-sizing-modal' });
@@ -255,6 +260,8 @@ class SizeChartScraper:
                 popup_selector = '.kiwi-sizing-modal, .ks-chart-container, .ks-modal-content'
             elif self.detected_type == 'MODAL_SCR':
                 popup_selector = '.scr-modal'
+            elif self.detected_type == 'MODAL_AVADA':
+                popup_selector = '#avada-modal-content, .Avada-Modal__ContainerWrapper'
             elif self.detected_type == 'ACCORDION':
                 popup_selector = 'details[open]'
             elif self.detected_type == 'TAB':
@@ -272,7 +279,8 @@ class SizeChartScraper:
             popup_selectors = [
                 ".mfp-content", ".ilmsc-modal", ".pswp--open", ".modal.show",
                 ".scr-modal", "[class*='sizechart']", ".size-guide-modal", ".popup-content",
-                ".drawer.is-active", ".modal-open", "[aria-modal='true']"
+                ".drawer.is-active", ".modal-open", "[aria-modal='true']",
+                "#avada-modal-content", ".Avada-Modal__ContainerWrapper"
             ]
             for selector in popup_selectors:
                 try:
@@ -558,6 +566,8 @@ class SizeChartScraper:
                     '[class*="jsc-"]',
                     // Kiwi Sizing Modals
                     '.kiwi-sizing-modal', '.ks-chart-container', '.ks-modal-content', '[id*="kiwi-sizing"]',
+                    // Avada Theme Modals
+                    '#avada-modal-content', '.Avada-Modal__ContainerWrapper', '[class*="Avada-Modal"]',
                     // Other size chart modals
                     '.ilmsc-modal', '.ilmsc-modal-content', '.ilmsc-content', '.sizechart-container',
                     '.mfp-content', '.mfp-container', 
@@ -589,6 +599,7 @@ class SizeChartScraper:
                         '[aria-modal="true"][role="dialog"], ' +
                         '.is-open[role="dialog"], .modal.open, .fancybox-content, ' +
                         '.scr-modal, [class*="scr-modal"], ' +
+                        '#avada-modal-content, .Avada-Modal__ContainerWrapper, [class*="Avada-Modal"], ' +
                         '.ilmsc-modal, .ilmsc-modal-content, [class*="ilmsc"], ' +
                         '[class*="sizechart-modal"], [class*="size-chart-modal"], [class*="sizechart"], ' +
                         '.drawer__content, .drawer, [class*="drawer"]'
@@ -613,6 +624,8 @@ class SizeChartScraper:
                         
                         // SCR Size Chart app - high priority modal
                         if (cls.includes('scr-modal')) score += 80;
+                        // Avada Theme modals - high priority
+                        if (cls.includes('avada-modal') || id.includes('avada-modal')) score += 80;
                         
                         // Penalize inline containers that are just triggers/wrappers (not actual content holders)
                         // These often match sizechart-related classes but contain no content themselves
@@ -813,6 +826,7 @@ class SizeChartScraper:
                     if (cls.includes("mfp-content") || cls.includes("mfp-wrap")) score += 70;
                     if (cls.includes("modal-content") || cls.includes("modal-body")) score += 60;
                     if (cls.includes("ilmsc-modal") || cls.includes("ilmsc-content")) score += 80;
+                    if (cls.includes("avada-modal") || id.includes("avada-modal")) score += 80;
                     
                     if (el.hasAttribute("data-sc-priority")) score += 50;
                     if (el.hasAttribute("data-sc-trigger")) score -= 20; // Triggers are not content

@@ -7,10 +7,10 @@ Updates scraped products in the database by:
 3. Scraping size charts for apparel products and storing as HTML
 
 Features:
+- tqdm progress bar with ETA (resumes correctly after stop/restart)
+- Concise, important-only console logging
 - Progress tracking in progress.json (resume from where it stopped)
 - Error logging in error.json with product URLs
-- Console logging for progress
-- Batch processing for 50k+ products
 """
 
 import asyncio
@@ -24,8 +24,8 @@ from psycopg2.extras import Json, RealDictCursor
 from datetime import datetime
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+from tqdm import tqdm
 
-# Import the size chart scraper
 # Import the size chart scraper
 from scraper import SizeChartScraper
 
@@ -33,7 +33,6 @@ from scraper import SizeChartScraper
 try:
     from generic_product_scraper import fetch_generic_product_data
 except ImportError:
-    print("Warning: generic_product_scraper module not found. Non-Shopify fallback disabled.")
     fetch_generic_product_data = None
 
 def adapt_generic_data_to_shopify_format(generic_data):
@@ -88,14 +87,22 @@ DB_CONFIG = {
 }
 
 
+def log(msg, pbar=None):
+    """Print a log message, using tqdm.write if a progress bar is active."""
+    if pbar is not None:
+        pbar.write(msg)
+    else:
+        print(msg)
+
+
 def load_progress():
     """Load progress from progress.json"""
     if os.path.exists(PROGRESS_FILE):
         try:
             with open(PROGRESS_FILE, "r") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"[WARN] Could not load progress file: {e}")
+        except Exception:
+            pass
     return {
         "last_processed_id": None,
         "total_processed": 0,
@@ -119,8 +126,8 @@ def load_errors():
         try:
             with open(ERROR_FILE, "r") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"[WARN] Could not load error file: {e}")
+        except Exception:
+            pass
     return {"errors": []}
 
 
@@ -148,7 +155,6 @@ def fetch_shopify_json(brand_url: str, timeout: int = 30) -> dict:
     Fetch product data from Shopify JSON endpoint.
     Appends .js to the brand_url to get JSON response.
     """
-    # Construct JSON URL
     json_url = brand_url.rstrip("/") + ".js"
     
     headers = {
@@ -203,7 +209,6 @@ def images_to_html(images: list) -> str:
     
     html = '<div class="size-chart-images">\n'
     for img_url in images:
-        # Ensure URL has https protocol
         if img_url.startswith("//"):
             img_url = "https:" + img_url
         html += f'  <img src="{img_url}" alt="Size Chart" loading="lazy" />\n'
@@ -221,9 +226,7 @@ def result_to_html(result: dict) -> str:
     if result.get("images"):
         parts.append(images_to_html(result["images"]))
     
-    # Handle text-based size info (HTML content from containers like dopamean.in)
     if result.get("textHtml"):
-        # Wrap the extracted HTML in a size-info div
         text_html = result["textHtml"]
         parts.append(f'<div class="size-chart-text">\n{text_html}\n</div>')
     
@@ -241,7 +244,6 @@ async def scrape_size_chart(brand_url: str) -> str:
     try:
         scraper = SizeChartScraper(brand_url, headless=True)
         
-        # Monkey-patch the run method to return result instead of printing
         async with __import__('playwright.async_api', fromlist=['async_playwright']).async_playwright() as p:
             args = [
                 "--disable-blink-features=AutomationControlled",
@@ -290,15 +292,11 @@ async def scrape_size_chart(brand_url: str) -> str:
             # Extract content
             result = await scraper.extract_content(page)
             
-            # NO FALLBACK - only use DOM extraction results
-            # The Shopify fallback was returning random product images as size charts
-            
             await context.close()
             
             return result_to_html(result)
             
-    except Exception as e:
-        print(f"    [SIZE CHART ERROR] {e}")
+    except Exception:
         return None
 
 
@@ -355,7 +353,6 @@ def update_product(conn, product_id: int, shopify_data: dict, size_chart_html: s
         params.append(Json(options))
     
     if cleaned_images:
-        # Use PostgreSQL array format, not JSON
         update_fields.append("images = %s")
         params.append(cleaned_images)
     
@@ -363,10 +360,8 @@ def update_product(conn, product_id: int, shopify_data: dict, size_chart_html: s
         update_fields.append("size_chart = %s")
         params.append(size_chart_html)
     elif size_chart_html == "":
-        # Explicitly clear size_chart for apparel products with no chart found
         update_fields.append("size_chart = NULL")
     
-    # Add product_id for WHERE clause
     params.append(product_id)
     
     query = f"""
@@ -419,11 +414,20 @@ def get_total_count(conn, last_id: int = None):
         return cur.fetchone()["count"]
 
 
+def get_absolute_total(conn):
+    """Get absolute total count of all products (for progress bar denominator)"""
+    query = """
+        SELECT COUNT(*) as count
+        FROM scraped_products
+        WHERE brand_url IS NOT NULL AND brand_url != ''
+    """
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return cur.fetchone()["count"]
+
+
 async def main():
     """Main function to run the product updater"""
-    print("=" * 60)
-    print("PRODUCT UPDATER - Starting")
-    print("=" * 60)
     
     # Load progress
     progress = load_progress()
@@ -433,194 +437,191 @@ async def main():
     
     last_id = progress.get("last_processed_id")
     
-    if last_id:
-        print(f"[RESUME] Continuing from product ID: {last_id}")
-        print(f"  - Previously processed: {progress['total_processed']}")
-        print(f"  - Previously updated: {progress['total_updated']}")
-        print(f"  - Previous errors: {progress['total_errors']}")
-    else:
-        print("[START] Fresh start - no previous progress found")
-    
     # Connect to database
-    print("\n[DB] Connecting to database...")
     try:
         conn = get_db_connection()
-        print("[DB] Connected successfully!")
     except Exception as e:
-        print(f"[DB ERROR] Failed to connect: {e}")
+        print(f"✖ DB connection failed: {e}")
         return
     
-    # Get total remaining count
+    # Get counts
+    total_all = get_absolute_total(conn)
     remaining = get_total_count(conn, last_id)
-    print(f"[INFO] Products remaining: {remaining:,}")
+    already_done = progress["total_processed"]
+    
+    # Header
+    print()
+    print("━" * 55)
+    print("  PRODUCT UPDATER")
+    print("━" * 55)
+    if last_id:
+        print(f"  ▸ Resuming — {already_done:,} done, {remaining:,} remaining")
+        print(f"  ▸ Updated: {progress['total_updated']:,}  Errors: {progress['total_errors']:,}")
+    else:
+        print(f"  ▸ Fresh start — {total_all:,} products")
+    print("━" * 55)
+    print()
     
     batch_size = 50
-    processed = 0
-    updated = 0
-    errors = 0
+    session_updated = 0
+    session_errors = 0
+    session_size_charts = 0
+    session_no_size_charts = 0
+    session_deleted = 0
+    
+    # Create progress bar: total = all products, initial = already done
+    pbar = tqdm(
+        total=total_all,
+        initial=already_done,
+        desc="Updating",
+        unit="product",
+        bar_format="{l_bar}{bar:30}{r_bar}",
+        colour="green",
+        dynamic_ncols=True,
+    )
     
     try:
         while True:
-            # Fetch batch
             products = get_products_to_update(conn, last_id, batch_size)
             
             if not products:
-                print("\n[DONE] No more products to process!")
+                log("✔ All products processed!", pbar)
                 break
-            
-            print(f"\n[BATCH] Processing {len(products)} products...")
             
             for product in products:
                 product_id = product["id"]
                 brand_url = product["brand_url"]
                 category = (product.get("category") or "").lower().strip()
                 title = product.get("title") or "Unknown"
+                short_title = title[:45] + "…" if len(title) > 45 else title
                 
-                processed += 1
                 progress["total_processed"] += 1
                 
-                # Log progress
-                total_done = progress["total_processed"]
-                print(f"\n[{total_done:,}/{total_done + remaining - processed:,}] ID: {product_id}")
-                print(f"  Title: {title[:50]}...")
-                print(f"  URL: {brand_url[:60]}...")
-                print(f"  Category: {category or 'N/A'}")
+                # Update progress bar description with current product
+                pbar.set_postfix_str(f"{short_title}", refresh=True)
                 
-                # Initialize fallback result
                 shopify_data = None
                 
                 try:
-                    # Inner try to handle fallback specific logic
+                    # Fetch product data
                     try:
-                        # Fetch Shopify JSON
-                        print("  [FETCH] Getting Shopify JSON...")
                         shopify_data = fetch_shopify_json(brand_url)
-                        print(f"  [FETCH] Success - Title: {shopify_data.get('title', 'N/A')[:40]}...")
                     except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError, Exception) as e_shopify:
-                        # If generic scraper is available, try fallback
                         if fetch_generic_product_data:
-                            print(f"  [FETCH] Shopify JSON failed: {str(e_shopify)[:100]}")
-                            print("  [FALLBACK] Attempting Generic Scraper...")
                             try:
-                                # Use await since Generic Scraper is async
                                 generic_data = await fetch_generic_product_data(brand_url)
                                 if generic_data and generic_data.get('title'):
                                     shopify_data = adapt_generic_data_to_shopify_format(generic_data)
-                                    print(f"  [FALLBACK] Success - Title: {shopify_data['product']['title'][:40]}...")
+                                    log(f"  ↻ Fallback OK: {short_title}", pbar)
                                 else:
-                                    print("  [FALLBACK] Failed or returned empty data.")
-                                    # Re-raise original error if fallback also failed
                                     raise e_shopify
-                            except Exception as e_generic:
-                                print(f"  [FALLBACK] Generic Scraper failed: {e_generic}")
-                                raise e_shopify # Raise original error for logging
+                            except Exception:
+                                raise e_shopify
                         else:
                             raise e_shopify
                     
                     # Scrape size chart (apparel only)
                     size_chart_html = None
                     if category == "apparel":
-                        # Check if we should scrape size chart
-                        # If we used generic scraper, size chart logic is separate and robust
-                        print("  [SIZE CHART] Scraping size chart (apparel)...")
-                        # scrape_size_chart is async
+                        log(f"  📐 Size chart: {short_title}", pbar)
                         size_chart_html = await scrape_size_chart(brand_url)
                         if size_chart_html:
-                            print(f"  [SIZE CHART] Found! HTML length: {len(size_chart_html)} chars")
+                            log(f"  ✔ Size chart found ({len(size_chart_html)} chars)", pbar)
+                            session_size_charts += 1
                         else:
                             size_chart_html = ""
-                            print("  [SIZE CHART] Not found - will clear field")
-                    else:
-                        print("  [SIZE CHART] Skipped (not apparel)")
+                            log(f"  ✖ No size chart", pbar)
+                            session_no_size_charts += 1
                         
                     # Update database
-                    print("  [UPDATE] Updating database...")
                     update_product(conn, product_id, shopify_data, size_chart_html)
-                    print("  [UPDATE] Success!")
                     
-                    updated += 1
+                    session_updated += 1
                     progress["total_updated"] += 1
                     
                 except httpx.HTTPStatusError as e:
-                    print(f"  [ERROR] HTTP {e.response.status_code}: {e}")
                     try:
                         conn.rollback()
                     except:
                         pass
                     
-                    # If 404, DELETE the product
                     if e.response.status_code == 404:
-                        print(f"  [DELETE] verified 404 for {brand_url}")
                         try:
                             with conn.cursor() as cur:
                                 cur.execute("DELETE FROM scraped_products WHERE id = %s", (product_id,))
                             conn.commit()
-                            print(f"  [DELETE] Successfully removed product ID {product_id}")
-                            processed += 1 # Count as processed
-                            progress["total_processed"] += 1
-                            continue # Skip to next product
+                            log(f"  🗑 Deleted (404): {short_title}", pbar)
+                            session_deleted += 1
+                            pbar.update(1)
+                            last_id = product_id
+                            progress["last_processed_id"] = last_id
+                            continue
                         except Exception as del_e:
-                            print(f"  [DELETE ERROR] Failed to delete: {del_e}")
                             conn.rollback()
+                            log(f"  ✖ Delete failed: {del_e}", pbar)
 
                     save_error(product_id, brand_url, str(e), "http")
-                    errors += 1
+                    log(f"  ✖ HTTP {e.response.status_code}: {short_title}", pbar)
+                    session_errors += 1
                     progress["total_errors"] += 1
                     
                 except httpx.RequestError as e:
-                    print(f"  [ERROR] Request failed: {e}")
                     try:
                         conn.rollback()
                     except:
                         pass
                     save_error(product_id, brand_url, str(e), "request")
-                    errors += 1
+                    log(f"  ✖ Request failed: {short_title}", pbar)
+                    session_errors += 1
                     progress["total_errors"] += 1
                     
                 except Exception as e:
-                    print(f"  [ERROR] Unexpected: {e}")
-                    # Rollback transaction to prevent 'transaction aborted' errors
                     try:
                         conn.rollback()
                     except:
                         pass
                     save_error(product_id, brand_url, str(e), "unknown")
-                    errors += 1
+                    log(f"  ✖ Error: {short_title} — {str(e)[:60]}", pbar)
+                    session_errors += 1
                     progress["total_errors"] += 1
                 
-                # Update last processed ID
+                # Update last processed ID and advance progress bar
                 last_id = product_id
                 progress["last_processed_id"] = last_id
+                pbar.update(1)
                 
                 # Save progress every 10 products
-                if processed % 10 == 0:
+                if progress["total_processed"] % 10 == 0:
                     save_progress(progress)
-                    print(f"\n  [PROGRESS SAVED] {progress['total_processed']:,} processed, {progress['total_updated']:,} updated, {progress['total_errors']:,} errors")
             
             # Save progress after each batch
             save_progress(progress)
             
-            # Small delay between batches to avoid overwhelming
             await asyncio.sleep(0.5)
             
     except KeyboardInterrupt:
-        print("\n\n[INTERRUPTED] Saving progress...")
+        log("\n⏸ Interrupted — progress saved!", pbar)
         save_progress(progress)
-        print("[SAVED] You can resume later!")
         
     finally:
+        pbar.close()
         conn.close()
         save_progress(progress)
         
-        print("\n" + "=" * 60)
-        print("PRODUCT UPDATER - Summary")
-        print("=" * 60)
-        print(f"  Total Processed: {progress['total_processed']:,}")
-        print(f"  Total Updated:   {progress['total_updated']:,}")
-        print(f"  Total Errors:    {progress['total_errors']:,}")
-        print(f"  Progress saved to: {PROGRESS_FILE}")
-        print(f"  Errors saved to:   {ERROR_FILE}")
-        print("=" * 60)
+        # Summary
+        print()
+        print("━" * 55)
+        print("  SESSION SUMMARY")
+        print("━" * 55)
+        print(f"  Updated:      {session_updated:,}")
+        print(f"  Errors:       {session_errors:,}")
+        print(f"  Deleted(404): {session_deleted:,}")
+        print(f"  Size charts:  ✔ {session_size_charts:,}  ✖ {session_no_size_charts:,}")
+        print("─" * 55)
+        print(f"  TOTAL Done:   {progress['total_processed']:,} / {total_all:,}")
+        print(f"  TOTAL Updated:{progress['total_updated']:,}")
+        print(f"  TOTAL Errors: {progress['total_errors']:,}")
+        print("━" * 55)
 
 
 if __name__ == "__main__":
